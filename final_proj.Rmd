@@ -1,0 +1,802 @@
+# final proj 
+
+## data and libraries
+```{r}
+library(tidyverse)
+library(broom)
+library(gridExtra)
+library(here)
+library(janitor)
+library(lmerTest)
+library(ggplot2)
+library(Hmisc)
+library(arm)
+library(wesanderson)
+
+theme_set(theme_light())
+```
+
+```{r}
+aqchoice <- read_csv(here("data", "AQChoiceData.csv"))
+
+ascchoice <- read_csv(here("data", "ASCChoiceData.csv"))
+
+attributes <- read_csv(here("data", "Attributes.csv"))
+```
+
+AQ 
+```{r}
+# Some subjects failed too much in getting the catch trials
+aqchoice %>% 
+  group_by(Pcp) %>% 
+  summarise(Catchfail = mean(Catchfail)) %>% 
+  arrange(-Catchfail) %>% 
+  slice_head(n = 18) %>% 
+  pull(Pcp) -> failed_pcps_aq
+
+cutoffpoint <- sd(aqchoice$Dur*2, na.rm = TRUE)/1000 # 2 minutes seems to be a good cutoff
+
+aqchoice_tidy <- aqchoice %>%
+  clean_names() %>%
+  filter(dur/1000 < cutoffpoint,
+         catch == 0,
+         choice != "D",
+         gender != "PNTS",
+         !pcp %in% failed_pcps_aq,
+         version == 1) %>%  
+  mutate(
+    # version = factor(version),
+    pcp = factor(pcp),
+    dur_log = log(dur),
+    dur_std = rescale(dur),
+    set = factor(set),
+    choice = factor(choice),
+    pos1 = factor(pos1),
+    pos2 = factor(pos2),
+    pos3 = factor(pos3),
+    target = factor(target),
+    a_qgroup = factor(a_qgroup),
+    icar_std = rescale(icar),
+    aq_score_std = rescale(aq_score),
+    trial_std = arm::rescale(trial),
+    age_std = rescale(age),
+    gender = factor(gender),
+    nationality = factor(nationality),
+    aut = factor(aut),
+    match = factor(ifelse(choice == target, 1, 0), levels = c(1,0), labels = c("yes", "no")),
+    sensory = factor(case_when(
+      product == "apartment" ~ 1,
+      product == "cell phone" ~ 0,
+      product == "couch" ~ 1,
+      product == "headphones" ~ 1,
+      product == "highlighter" ~ 1,
+      product == "job" ~ 0,
+      product == "notebook" ~ 0,
+      product == "orange juice" ~ 0,
+      product == "paper towels" ~ 0,
+      product == "printer" ~ 0,
+      product == "screen" ~ 1,
+      product == "second-hand book" ~ 0,
+      product == "shares" ~ 0,
+      product == "USB drive" ~ 0,
+      product == "vacuum cleaner" ~ 1,
+      TRUE ~ 1
+    )),
+    sen_dom = case_when(
+      product == "apartment" ~ "B",
+      product == "couch" ~ "B",
+      product == "headphones" ~ "B",
+      product == "highlighter" ~ "B",
+      product == "screen" ~ "A",
+      product == "vacuum cleaner" ~ "A",
+      product == "walking shoes" ~ "A",
+      TRUE ~ NA_character_
+    )
+  )
+  
+
+aq_consistent <- aqchoice_tidy %>% 
+  filter(catch == 0) %>% 
+  dplyr::select(pcp, dur_std, dur_log, age_std, gender, a_qgroup, trial, trial_std, choice, target, product, adom, bdom, sensory, sen_dom) %>% 
+  group_by(pcp, product) %>% 
+  filter(n() == 2) %>% 
+  mutate(timing = ifelse(trial == max(trial), 2, 1)) %>% 
+  arrange(timing) %>% 
+  ungroup() %>% 
+  group_by(pcp, product) %>%
+  mutate(consistent = duplicated(choice),
+         sensory = factor(sensory),
+         product = factor(product),
+         timing = factor(timing),
+         consistent = factor(ifelse(consistent == FALSE, 0, 1), levels = c(0,1), labels = c("no","yes")))
+
+
+contrasts(aqchoice_tidy$a_qgroup) <- contr.helmert(2)/2
+contrasts(aqchoice_tidy$gender) <- contr.helmert(2)/2
+contrasts(aqchoice_tidy$aut) <- contr.treatment(3)
+contrasts(aq_consistent$target) <- contr.helmert(2)/2
+contrasts(aqchoice_tidy$choice) <- contr.helmert(2)/2
+contrasts(aqchoice_tidy$pos1) <- contr.helmert(3)
+contrasts(aqchoice_tidy$match) <- contr.helmert(2)/2
+
+contrasts(aq_consistent$gender) <- contr.helmert(2)/2
+contrasts(aq_consistent$a_qgroup) <- contr.helmert(2)/2
+contrasts(aq_consistent$choice) <- contr.helmert(2)/2
+contrasts(aq_consistent$target) <- contr.helmert(2)/2
+contrasts(aq_consistent$sensory) <- contr.helmert(2)/2
+contrasts(aq_consistent$timing) <- contr.helmert(2)/2
+contrasts(aq_consistent$consistent) <- contr.helmert(2)/2
+
+aq_sensory <- aqchoice_tidy %>% 
+  filter(!is.na(sensory)) %>% 
+  mutate(sensory = factor(sensory))
+
+contrasts(aq_sensory$sensory) <- contr.helmert(2)/2
+```
+
+
+ASC
+```{r}
+ascchoice %>% 
+  group_by(Pcp) %>% 
+  summarise(Catchfail = mean(Catchfail)) %>% 
+  arrange(-Catchfail) %>% 
+  filter(Catchfail >= 3) %>% 
+  pull(Pcp) -> failed_pcps_asc
+
+cutoffpoint <- sd(ascchoice$Dur*2, na.rm = TRUE)/1000 # ~5 minutes cutoff
+
+ascchoice_tidy <- ascchoice %>% 
+  clean_names() %>% 
+  filter(dur/1000 < cutoffpoint,
+         catch == 0,
+         choice != "D",
+         gender != "PNTS",
+         !pcp %in% failed_pcps_asc) %>% 
+  mutate(
+    pcp = factor(pcp),
+    set = factor(set),
+    choice = factor(choice),
+    pos1 = factor(pos1),
+    pos2 = factor(pos2),
+    pos3 = factor(pos3),
+    target = factor(target),
+    dur_log = log(dur),
+    dur_std = arm::rescale(dur),
+    asc = factor(asc, levels = c(0,1), labels = c("no", "yes")),
+    icar_std = arm::rescale(icar),
+    aq_score_std = arm::rescale(aq_score),
+    age_std = arm::rescale(age),
+    gender = factor(gender),
+    residence = factor(residence),
+    set = factor(set),
+    trial_std = arm::rescale(trial),
+    comorbid = factor(comorbid, levels = c(0,1), labels = c("no", "yes")),
+    match = factor(ifelse(choice == target, 1, 0), levels = c(1,0), labels = c("yes", "no")),
+    sensory = factor(case_when(
+      product == "apartment" ~ 1,
+      product == "cell phone" ~ 0,
+      product == "couch" ~ 1,
+      product == "headphones" ~ 1,
+      product == "highlighter" ~ 1,
+      product == "job" ~ 0,
+      product == "notebook" ~ 0,
+      product == "orange juice" ~ 0,
+      product == "paper towels" ~ 0,
+      product == "printer" ~ 0,
+      product == "screen" ~ 1,
+      product == "second-hand book" ~ 0,
+      product == "shares" ~ 0,
+      product == "USB drive" ~ 0,
+      product == "vacuum cleaner" ~ 1,
+      TRUE ~ 1
+    )),
+    sen_dom = case_when(
+      product == "apartment" ~ "B",
+      product == "couch" ~ "B",
+      product == "headphones" ~ "B",
+      product == "highlighter" ~ "B",
+      product == "screen" ~ "A",
+      product == "vacuum cleaner" ~ "A",
+      product == "walking shoes" ~ "A",
+      TRUE ~ NA_character_
+    )
+         )  %>% 
+  droplevels()
+
+
+asc_consistent <- ascchoice_tidy %>% 
+  filter(catch == 0) %>% 
+  dplyr::select(pcp, dur_std, dur_log, age_std, gender, asc, trial, trial_std, choice, target, product, adom, bdom, sensory, sen_dom) %>% 
+  group_by(pcp, product) %>% 
+  filter(n() == 2) %>% 
+  mutate(timing = ifelse(trial == max(trial), 2, 1)) %>% 
+  arrange(timing) %>% 
+  ungroup() %>% 
+  group_by(pcp, product) %>%
+  mutate(consistent = duplicated(choice),
+         sensory = factor(sensory),
+         product = factor(product),
+         timing = factor(timing),
+         consistent = factor(ifelse(consistent == FALSE, 0, 1), levels = c(0,1), labels = c("no","yes")))
+
+asc_sensory <- ascchoice_tidy %>% 
+  filter(!is.na(sensory)) %>% 
+  mutate(sensory = factor(sensory))
+  
+
+contrasts(ascchoice_tidy$match) <- contr.helmert(2)/2
+contrasts(ascchoice_tidy$choice) <- contr.helmert(2)/2
+contrasts(ascchoice_tidy$target) <- contr.helmert(2)/2
+contrasts(ascchoice_tidy$asc) <- contr.helmert(2)/2
+contrasts(ascchoice_tidy$gender) <- contr.helmert(2)/2
+
+contrasts(asc_sensory$sensory) <- contr.helmert(2)/2
+contrasts(asc_sensory$match) <- contr.helmert(2)/2
+contrasts(asc_sensory$asc) <- contr.helmert(2)/2
+contrasts(asc_sensory$gender) <- contr.helmert(2)/2
+
+contrasts(asc_consistent$gender) <- contr.helmert(2)/2
+contrasts(asc_consistent$choice) <- contr.helmert(2)/2
+contrasts(asc_consistent$sensory) <- contr.helmert(2)/2
+contrasts(asc_consistent$target) <- contr.helmert(2)/2
+contrasts(asc_consistent$timing) <- contr.helmert(2)/2
+contrasts(asc_consistent$asc) <- contr.helmert(2)/2
+contrasts(asc_consistent$consistent) <- contr.helmert(2)/2
+```
+
+```{r}
+ggplot(data = aqchoice) +
+  geom_histogram(aes(x = Dur/1000), fill = "red", alpha = .2) +
+  geom_histogram(aes(x = Dur/1000), data = ascchoice, fill = "steelblue", alpha = .4) +
+  xlim(c(0, 1e5/1000))
+```
+
+
+## EDA AQ
+```{r}
+p1 <- aqchoice_tidy %>% 
+  ggplot(aes(x = dur/1000)) +
+  geom_histogram() +
+  labs(x = "Duration in seconds")
+
+p2 <- aqchoice_tidy %>% 
+  ggplot(aes(x = log(dur/1000))) +
+  geom_histogram() +
+  labs(x = "Duration in seconds (log)")
+
+grid.arrange(p1, p2, nrow = 1)
+```
+
+Effect of group on choice?
+```{r}
+tb <- table(aqchoice_tidy$match, aqchoice_tidy$a_qgroup)
+
+tb2 <- tibble(
+  a_qgroup = factor(c("H", "H", "L", "L")),
+  match = factor(c("no", "yes", "no", "yes")),
+  label = c(tb[2], tb[1], tb[4], tb[3])
+)
+
+aqchoice_tidy %>%  # switch L and H around
+  ggplot(aes(x = a_qgroup, y = match)) +
+  geom_jitter(color = "steelblue", alpha = 0.4) +
+  geom_label(aes(label = label), data = tb2) +
+  labs(x = "AQ group", y = "Choice - Target match", 
+       caption = paste("Fisher's exact test p-value = ", round(fisher.test(tb)$p.value, digits = 2)))
+
+```
+
+Order and duration?
+```{r}
+aqchoice_tidy %>% 
+  ggplot(aes(x = trial, y = dur/1000)) +
+  stat_summary(geom = "line", aes(group = a_qgroup, color = a_qgroup)) +
+  labs(x = "Trial", y = "Response time (seconds)", color = "AQ Group")
+
+summary(mod <- lm(dur_log ~ as.numeric(trial) + a_qgroup, data = aqchoice_tidy))
+```
+
+
+## EDA ASC
+
+```{r}
+errorbr <- ascchoice_tidy %>% 
+  group_by(asc) %>% 
+  summarise(median_dur = median(dur)/1000, 
+            lwr = quantile(dur, probs = 0.05)/1000,
+            upr = quantile(dur, probs = 0.95)/1000)
+
+ascchoice_tidy %>%
+  ggplot(aes(x = asc)) +
+  geom_jitter(aes(y = dur/1000,color = asc), width = .1, alpha = .05) +
+  geom_errorbar(aes(ymin = lwr, ymax = upr), data = errorbr, width = .13, color = "gray25") +
+  geom_point(aes(y = median_dur), data = errorbr, shape = 18, size = 2) +
+  ylim(0, 60) +
+  labs(x = "Autism Spectrum Condition", y = "Response Time (Seconds)") +
+  theme(legend.position = "none") +
+  scale_color_manual(values = wes_palette("Darjeeling1", 2))
+# # 
+# errorbr <- ascchoice_tidy %>% 
+#   group_by(asc) %>% 
+#   summarise(mean = mean(dur/1000), 
+#             lwr = quantile(dur, probs = 0.05)/1000,
+#             upr = quantile(dur, probs = 0.95)/1000)
+# 
+# ascchoice_tidy %>%
+#   ggplot(aes(x = asc)) +
+#   geom_jitter(aes(y = dur/1000,color = asc), width = .1, alpha = .05) +
+#   geom_errorbar(aes(ymin = lwr, ymax = upr), data = errorbr, width = .13, color = "gray25") +
+#   geom_point(aes(y = mean), data = errorbr, shape = 18, size = 2) +
+#   ylim(0, 60) +
+#   labs(x = "Autism Spectrum Condition", y = "Response Time (Seconds)") +
+#   theme(legend.position = "none") +
+#   scale_color_manual(values = wes_palette("Darjeeling1", 2))
+# ```
+```
+
+Effect of group on choice?
+```{r}
+tb <- table(ascchoice_tidy$match, ascchoice_tidy$asc)
+
+tb2 <- tibble(
+  asc = factor(c("yes", "yes", "no", "no")),
+  match = factor(c("no", "yes", "no", "yes")),
+  label = c(tb[4], tb[3], tb[2], tb[1])
+)
+
+ascchoice_tidy %>% 
+  ggplot(aes(x = asc, y = match)) +
+  geom_jitter(color = wes_palette("Darjeeling1", 1), alpha = 0.4) +
+  geom_label(aes(label = label), data = tb2) +
+  labs(x = "Autism spectrum condition", y = "Choice - Target match", 
+       caption = paste("Fisher's exact test p-value = ", round(fisher.test(tb)$p.value, digits = 6))) 
+
+# fisher.test(tb)
+```
+
+
+
+Order and duration?
+```{r}
+ascchoice_tidy %>% 
+  ggplot(aes(x = trial, y = dur/1000)) +
+  stat_summary(geom = "line", aes(group = asc, color = asc)) +
+  labs(x = "Trial", y = "Response time (seconds)", color = "ASC")
+
+summary(mod <- lm(dur_log ~ trial * asc, data = ascchoice_tidy))
+```
+
+```{r}
+m1 <- glm(match ~ a_qgroup + dur_std + as.numeric(trial), data = aqchoice_tidy, family = "binomial")
+summary(m1)
+
+m2 <- glm(match ~ asc + dur_std + trial, data = ascchoice_tidy, family = "binomial")
+summary(m2)
+
+# plot trial by match
+```
+
+Product x asc
+```{r}
+p1 <- aqchoice_tidy %>% 
+  filter(version == 1) %>% 
+  ggplot(aes(x = dur_log, fill = a_qgroup)) +
+  geom_density(alpha = .5) +
+  labs(x = "Response time (log)", y = "Density", fill = "ASC", title = "Reponse time distribution by product") +
+  scale_fill_manual(values = wes_palette("Darjeeling1", 4)[2:3]) +
+  facet_wrap(~ product)
+
+p2 <- ascchoice_tidy %>% 
+  ggplot(aes(x = dur_log, fill = asc)) +
+  geom_density(alpha = .7) +
+  labs(x = "Response time (log)", y = "Density", fill = "ASC", title = "Reponse time distribution by product") +
+  scale_fill_manual(values = wes_palette("Darjeeling1", 2)) +
+  facet_wrap(~ product) 
+
+grid.arrange(p1, p2, nrow = 2)
+```
+
+```{r}
+attach(asc_sensory)
+(tabb <- xtabs( ~ asc + sensory))
+fisher.test(table(as.numeric(asc), as.numeric(sensory))) # question for Morgan
+detach(asc_sensory)
+```
+
+
+
+
+
+# Serious modelling
+
+## ASC group
+
+### Fixed effects
+```{r}
+mod_fixed_asc_1 <- lm(dur_log ~ asc + product + match + trial_std + age_std + gender, data = ascchoice_tidy)
+summary(mod_fixed_asc_1)
+
+mod_fixed_asc_2 <- lm(dur_log ~ asc * sensory + match + trial_std + age_std + gender, data = asc_sensory)
+summary(mod_fixed_asc_2) # no interaction effect, consistent with chi2 test
+```
+
+### Random effects
+```{r THISISTHEONE}
+mod_random_asc_4 <- lmer(dur_log ~ asc * sensory + trial_std +  match + age_std + gender +
+                           (1 + sensory || pcp) +
+                           (1 + asc || product), 
+                         data = asc_sensory,
+                         REML = TRUE,
+                         control = lmerControl(optimizer ='bobyqa'))
+
+mm <- model.matrix(mod_random_asc_4) %>% data.frame()
+asc_sensory <- add_column(asc_sensory, sensory1 = mm$sensory1)
+asc_sensory <- add_column(asc_sensory, asc1 = mm$asc1)
+
+#  |||||
+#  |||||
+#  |||||
+# VVVVVVV 
+#  VVVVV
+#    V
+
+
+mod_random_asc_4 <- lmer(dur_log ~ asc * sensory + trial_std +  match + age_std + gender +
+                           (1 + sensory1 || pcp) +
+                           (1 + asc1 || product), 
+                         data = asc_sensory,
+                         REML = TRUE,
+                         control = lmerControl(optimizer ='bobyqa'))
+
+summary(mod_random_asc_4) # followed the steps of RMLD table 10.1 up to this point
+```
+
+Models with consistency
+```{r}
+const_random_asc_1 <- lmer(dur_log ~ asc * consistent + sensory + trial_std + age_std + gender + 
+                             (1 + sensory || pcp) +
+                             (1 + asc + consistent || product)
+                           , data = asc_consistent
+                           , REML = TRUE
+                           , control = lmerControl(optimizer ='bobyqa'))
+
+mm <- model.matrix(const_random_asc_1) %>% data.frame()
+asc_consistent <- add_column(asc_consistent, asc1 = mm$asc1)
+asc_consistent <- add_column(asc_consistent, consistent1 = mm$consistent1)
+asc_consistent <- add_column(asc_consistent, sensory1 = mm$sensory1)
+
+const_random_asc_1 <- lmer(dur_log ~ asc + consistent + sensory + trial_std + age_std + gender +
+                             asc:consistent + asc:sensory +
+                             (1 + sensory1 || pcp) +
+                             (1 + asc1 + consistent1  || product)
+                           , data = asc_consistent
+                           , REML = TRUE
+                           , control = lmerControl(optimizer ='bobyqa'))
+
+
+summary(const_random_asc_1) 
+
+# Now compare that with fixed effects-only model
+const_fixed_asc_1 <- lm(dur_log ~ asc + consistent + sensory + trial_std + age_std + gender +
+                             asc:consistent + asc:sensory, data = asc_consistent)
+summary(const_fixed_asc_1) # result = the mixed effects model probalby controls for by-group variability (hence the smaller pvalues)
+
+```  
+There is a large negative effect of consistency on response time. I think this may have to do with the fact that participants (some more than others) take time remembering their previous answer (note that the only instances where an observation is consistent is when that product has been displayed in a previous trial).
+
+Logistic regression:
+```{r}
+const_subset <- asc_consistent %>% filter(timing == 2) 
+  
+const_fixed_asc_1 <- glm(consistent ~ sensory * asc + dur_std + trial_std + gender
+                           , data = const_subset, family = "binomial")
+
+summary(const_fixed_asc_1) 
+```  
+Same results as the original study + gender.
+
+```{r}
+const_random_asc_2 <- glmer(consistent ~ sensory * asc + dur_std + trial_std + gender +
+                            (1 + sensory1 || pcp) +
+                            (1 + asc1 || product) 
+                           , data = const_subset, family = "binomial"
+                           , control = glmerControl(optimizer ='optimx', optCtrl=list(method='L-BFGS-B')))
+                           
+
+summary(const_random_asc_2) # holds
+```  
+
+
+
+
+
+## AQ group
+
+### Fixed effects
+```{r}
+
+mod_fixed_aq_1 <- lm(dur_log ~ a_qgroup + product + match + trial_std + age_std + gender, data = aqchoice_tidy)
+summary(mod_fixed_aq_1)
+
+mod_fixed_asc_2 <- lm(dur_log ~ a_qgroup * sensory + match + trial_std + age_std + gender, data = aq_sensory)
+summary(mod_fixed_asc_2) # no effect at all.. But how about the autistic only?
+
+mod_fixed_asc_3 <- lm(dur_log ~ aut * sensory + match + trial_std + age_std + gender, data = aq_sensory)
+summary(mod_fixed_asc_3) # LOL participants who PNTS about whether they've been diagnosed with autism are the ones who differ, i wanna plot that
+
+aqchoice_tidy %>% 
+  ggplot(aes(x = aut, y = dur/1000)) +
+  stat_summary(fun = "mean", geom = "point") +
+  stat_summary(fun.data = "mean_cl_boot", geom = "errorbar", width = .2) # wtf their distributions are sooo different. These data are weird...
+```
+
+### Random effects
+```{r}
+mod_random_aq_4 <- lmer(dur_log ~ a_qgroup * sensory + trial_std + match + age_std + gender +
+                           (1 + sensory || pcp) +
+                           (1 + a_qgroup || product), 
+                         data = aq_sensory,
+                         REML = TRUE,
+                         control = lmerControl(optimizer ='bobyqa'))
+
+mm <- model.matrix(mod_random_aq_4) %>% data.frame()
+aq_sensory <- add_column(aq_sensory, a_qgroup1 = mm$a_qgroup1)
+aq_sensory <- add_column(aq_sensory, sensory1 = mm$sensory1)
+
+#  |||||
+#  |||||
+#  |||||
+# VVVVVVV 
+#  VVVVV
+#    V
+
+mod_random_aq_4 <- lmer(dur_log ~ a_qgroup * sensory + trial_std + match + age_std + gender +
+                           (1 + sensory1 || pcp) +
+                           (1 + a_qgroup1 || product), 
+                         data = aq_sensory,
+                         REML = TRUE,
+                         control = lmerControl(
+                           optimizer ='optimx', optCtrl=list(method='nlminb'))
+                           )
+
+summary(mod_random_aq_4) # nothing interesting but probably true
+```
+
+Models with consistency
+```{r}
+
+const_random_aq_1 <- lmer(dur_log ~ a_qgroup * consistent + sensory + trial_std + age_std + gender + 
+                             (1 + sensory || pcp) +
+                             (1 + a_qgroup + consistent || product)
+                           , data = aq_consistent
+                           , REML = TRUE
+                           , control = lmerControl(optimizer ='bobyqa'))
+
+mm <- model.matrix(const_random_aq_1) %>% data.frame()
+aq_consistent <- add_column(aq_consistent, a_qgroup1 = mm$a_qgroup1)
+aq_consistent <- add_column(aq_consistent, consistent1 = mm$consistent1)
+aq_consistent <- add_column(aq_consistent, sensory1 = mm$sensory1)
+
+const_random_aq_1 <- lmer(dur_log ~ a_qgroup + consistent + sensory + trial_std + age_std + gender + 
+                            a_qgroup:consistent + a_qgroup:sensory +
+                             (1 + sensory1 || pcp) +
+                             (1 + a_qgroup1 + consistent1 || product)
+                           , data = aq_consistent
+                           , REML = TRUE
+                           , control = lmerControl(optimizer ='bobyqa'))
+
+summary(const_random_aq_1) 
+```
+Same note as above: There is a large negative effect of consistency on response time. I think this may have to do with the fact that the participants take time remembering their previous answer (note that the only instances where an observation is consistent is when that product has been displayed in a previous trial).
+
+Logistic regression:
+```{r}
+const_subset <- aq_consistent %>% filter(timing == 2) 
+
+const_fixed_aq_1 <- glm(consistent ~ sensory * a_qgroup + dur_std + trial_std + gender
+                           , data = const_subset, family = "binomial")
+
+summary(const_fixed_aq_1) 
+```  
+Super interesting: these are the same results that the authors found, + we found an effect of sensory attributes. Let's see if this holds in mixed models.
+
+
+```{r}
+const_random_aq_1 <- glmer(consistent ~ sensory * a_qgroup + dur_std + trial_std + gender +
+                            (1 + sensory1 || pcp) +
+                            (1 + a_qgroup1 || product) 
+                           , data = const_subset, family = "binomial"
+                           , control = glmerControl(optimizer ='bobyqa'))
+                           
+summary(const_random_aq_1) 
+```  
+
+
+
+Recycle bin
+
+## preliminaries AQ
+```{r}
+
+
+aqchoice %>% 
+  filter(Pcp %in% failed_pcps) %>% 
+  # group_by(Pcp) %>% 
+  count(AQgroup) %>% 
+  mutate(n = n/26) # equally belonging to each group
+  
+
+aqchoice %>% 
+  ggplot(aes(x = Dur)) +
+  geom_histogram()
+
+aqchoice %>% 
+  arrange(-Dur) %>% 
+  dplyr::select(Pcp, Set, Trial, Dur) %>%  # !?!?!?!
+  mutate(dur_min = Dur/60000) -> hola; mean(hola$dur_min, na.rm = TRUE)
+  # head(n = 100) %>% View()
+
+aqchoice %>% 
+  group_by(Aut) %>% 
+  summarise(mean_dur = mean(Dur, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate(seconds = mean_dur/1000)
+
+aqchoice %>% 
+  arrange(-Dur) %>% 
+  dplyr::select(Pcp, Set, Trial, Dur, Aut, AQgroup) %>% 
+  mutate(dur_min = Dur/60000) %>% 
+  filter(dur_min > 5) %>% 
+  pull(Pcp) -> late_responders; aqchoice %>%
+  filter(Pcp %in% late_responders) %>% 
+  mutate(dur_min = Dur/60000) %>% View()
+```
+
+```{r}
+
+
+ascchoice %>% 
+  filter(Pcp %in% failed_asc_pcps) %>% 
+  # group_by(Pcp) %>% 
+  count(ASC) %>% 
+  mutate(n = n/26) # 3 ASC and 41 non-ASC
+
+
+ascchoice %>% 
+  arrange(-Dur) %>% 
+  dplyr::select(Pcp, Set, Trial, Dur) %>%  # !?!?!?!
+  mutate(dur_min = Dur/60000) -> hola; mean(hola$dur_min, na.rm = TRUE)
+  # head(n = 100) %>% View()
+
+ascchoice %>% 
+  group_by(ASC) %>% 
+  summarise(mean_dur = mean(Dur, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate(seconds = mean_dur/1000) # ASC particpants take longer to answer -- gotta plot this
+
+
+ascchoice %>% 
+  arrange(-Dur) %>% 
+  dplyr::select(Pcp, Set, Trial, Dur, ASC) %>% 
+  mutate(dur_min = Dur/60000) %>% 
+  filter(dur_min > 5) %>% 
+  pull(Pcp) -> late_responders; ascchoice %>%
+  filter(Pcp %in% late_responders) %>% 
+  mutate(dur_min = Dur/60000) %>% View()
+```
+
+```{r}
+# mod_random_aq_1 <- lmer(dur_log ~ a_qgroup + prod_cont + match + trial_std + age_std + gender +
+#                            (1 + a_qgroup + age_std + gender || prod_cont) +
+#                            (1 + trial_std || pcp), data = aqchoice_tidy
+#                         , REML = TRUE
+#                         , control = lmerControl(optimizer ='optimx', optCtrl=list(method='L-BFGS-B'))
+#                            )
+# summary(mod_random_aq_1)
+```
+```{r}
+# refit
+
+# mm <- model.matrix(mod_random_aq_1) %>% data.frame()
+# 
+# aqchoice_tidy <- add_column(aqchoice_tidy, a_qgroup1 = mm$a_qgroup1)
+# aqchoice_tidy <- add_column(aqchoice_tidy, gender1 = mm$gender1)
+# 
+# mod_random_aq_2 <- lmer(dur_log ~ a_qgroup + prod_cont + match + trial_std + age_std + gender +
+#                            (1 + a_qgroup + age_std + gender || prod_cont) +
+#                            (1 + trial_std || pcp), data = aqchoice_tidy
+#                            )
+# summary(mod_random_aq_2)
+```
+(These previous two models suck)
+
+```{r}
+mod_random_aq_5 <- lmer(dur_log ~ a_qgroup * sensory + match + trial + gender + age_std +
+                           (1 + a_qgroup1 + a_qgroup:sensory  || pcp) +
+                           (1 + a_qgroup1 || set), 
+                         data = aq_sensory,
+                         REML = FALSE,
+                         control = lmerControl(
+                           optimizer ='optimx', optCtrl=list(method='nlminb'))
+                           )
+
+summary(mod_random_aq_5) # qualitatively, fixed effects don't change; quantitatively, they do not change much.
+```
+(I think this is trash)
+
+```{r}
+mod_random_asc_5 <- lmer(dur_log ~ asc * sensory + match + trial + gender + age_std +
+                           (1 + asc1 + asc1.sensory1  || pcp) +
+                           (1 + asc1 || set), 
+                         data = asc_sensory,
+                         REML = FALSE,
+                         control = lmerControl(
+                           optimizer ='optimx', optCtrl=list(method='nlminb'))
+                           )
+summary(mod_random_asc_5) # qualitatively, fixed effects don't change; quantitatively, they do not change much.
+```
+
+```{r}
+mod_random_asc_6 <- lmer(dur_log ~ asc * sensory + match + trial + gender + age_std +
+                           (1 + trial || pcp)  + 
+                           (0 + asc1 || product), data = asc_sensory, # can use product instead of set
+                         control = lmerControl(
+                           optimizer ='optimx', optCtrl=list(method='nlminb'))
+                           )
+summary(mod_random_asc_6) # does converge, is not singular
+```
+
+This model seems better:
+```{r}
+# mod_fixed_aq_6 <- lmer(dur_log ~ a_qgroup * sensory + match + trial + gender + age_std +
+#                            (1 + trial || pcp)  + 
+#                            (1 + a_qgroup1 || product), data = aq_sensory, # if slopes, model fails to converge, and sensory not sig
+#                          control = lmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+
+
+mod_random_aq_6 <- lmer(dur_log ~ a_qgroup * sensory + trial +
+                           (1 + trial || pcp)  + 
+                           (1 + a_qgroup1 || product), data = aq_sensory, # if slopes, model fails to converge, and sensory not sig
+                         control = lmerControl(optimizer ='optimx', optCtrl=list(method='nlminb')))
+
+summary(mod_random_aq_6) # does not converge, is not singular, but see comment
+```
+
+
+### Random effects
+```{r}
+library(lmerTest)
+mod_random_asc_1 <- lmer(dur_log ~ asc + product + match + trial + age_std + gender +
+                           (1 + asc + age_std + gender | product) +
+                           (1 + trial | pcp), data = ascchoice_tidy
+                           )
+summary(mod_random_asc_1)
+
+# mm <- model.matrix(mod_random_asc_1) %>% data.frame()
+# 
+# ascchoice_tidy <- add_column(ascchoice_tidy, match1 = mm$match1)
+# ascchoice_tidy <- add_column(ascchoice_tidy, gender1 = mm$gender1)
+# ascchoice_tidy <- add_column(ascchoice_tidy, asc1 = mm$asc1)
+# 
+# mod_random_asc_2 <- lmer(dur_log ~ asc + product + match + trial + age_std + gender +
+#                            (1 + asc1 + age_std + gender1 || product) +
+#                            (1 + trial || pcp), data = ascchoice_tidy
+#                           )
+
+strict_tol <- lmerControl(optCtrl = list(xtol_abs = 1e-8, ftol_abs = 1e-8))
+mod_random_asc_2 <- update(mod_random_asc_1, control = strict_tol) # did not work
+
+
+fittedVals <- getME(mod_random_asc_2, "theta")
+mod_random_asc_2_1 <- update(mod_random_asc_1, start = fittedVals) # now it failed to converge (with a very low eigenvalue tho)
+                                                                   # but p-values are not all 1 now
+
+pars <- getME(mod_random_asc_1, "theta")
+fittedVals_perturbed <- runif(length(pars), pars / 1.01, pars * 1.01) * sign(pars)
+mod_random_asc_2_2 <- update(mod_random_asc_2, start = fittedVals_perturbed) # does not work -- NAs produced
+
+mod_random_asc_2_3 <- update(mod_random_asc_1, 
+                             control = lmerControl(optimizer = "bobyqa",
+                                                   optCtrl = list(maxfun = 300000))) # did not work
+```

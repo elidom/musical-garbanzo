@@ -1,0 +1,49 @@
+
+# PTB Timing testing
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+times <- read_csv("data/testing0146.csv", col_names = FALSE, skip = 11) %>% 
+  separate(X1, into = c("n", "type")) %>% 
+  mutate(n = str_remove(n, "Mk")) %>% 
+  select(n:X3) %>% 
+  rename(trigger = X2,
+         time = X3)
+```
+
+
+```{r}
+times2 <- times %>% 
+  drop_na(trigger) %>%
+  mutate(n = as.numeric(n) - 2) %>% 
+  mutate(time = ifelse(time == 1, 5782, time)) %>% 
+  mutate(miliseconds = time * 2)
+
+times2$diff = NA
+
+for (t in 2:501) {
+  times2$diff[t] = times2$miliseconds[t] - times2$miliseconds[t-1]
+}
+
+times3 <- times2 %>% 
+  filter(n > 1)
+```
+
+```{r}
+times3 %>% 
+  ggplot(aes(x = n, y = diff)) +
+  geom_line(group = 1, alpha = 0.3, color = "steelblue") +
+  geom_smooth(se = FALSE) +
+  scale_y_continuous(limits = c(495, 505), breaks = c(495, 498, 500, 502, 505)) +
+  scale_x_continuous(breaks = c(min(times3$n), max(times3$n))) +
+  xlab("Trial") +
+  ylab("Time elapsed since previous trial (ms)") +
+  theme_light() +
+  theme(
+    panel.grid.major.x = element_blank()
+  )
+```
+

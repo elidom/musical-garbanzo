@@ -1,0 +1,12 @@
+---
+title: "lockdown template example"
+date: "`r Sys.Date()`"
+output: rmdformats::lockdown
+pkgdown:
+  as_is: true  
+---
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = TRUE)
+```
+

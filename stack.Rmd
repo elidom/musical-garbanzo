@@ -1,0 +1,18 @@
+```{r}
+df <- data.frame(count = c(900, 500, 1220, 1300, 1500, 1600),
+                 year = c(2005, 2006, 2007, 2008, 2009, 2010))
+
+df2 <- data.frame(count = c(1020, 1000, 1004, 1005, 1010, 999),
+                 year = c(2005, 2006, 2007, 2008, 2009, 2010))
+
+
+chisq.test(xtabs(df$count ~ df$year))
+
+chisq.test(xtabs(df2$count ~ df2$year))
+```
+
+```{r}
+library(tidyverse)
+bursts <- read_delim("data/bursts.csv", delim = "   ")
+```
+
